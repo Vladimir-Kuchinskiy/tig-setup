@@ -1,0 +1,125 @@
+version: "3"
+
+services:
+  influxdb:
+    build: ./influxdb
+    container_name: ${CONTAINER_PREFIX}_influxdb
+    ports:
+      - ${INFLUXDB_PORT}:${INFLUXDB_PORT}
+    volumes:
+      - /var/lib/influxdb:/var/lib/influxdb
+    depends_on:
+      application:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "influx -execute 'SHOW DATABASES'" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+    env_file:
+      - .env
+
+  telegraf:
+    build: ./telegraf
+    container_name: ${CONTAINER_PREFIX}_telegraf
+    links:
+      - influxdb
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /proc:/hostfs/proc
+    privileged: true
+    restart: always
+    env_file:
+      - .env
+
+  grafana:
+    build: ./grafana
+    container_name: ${CONTAINER_PREFIX}_grafana
+    ports:
+      - ${GRAFANA_PORT}:${GRAFANA_PORT}
+    links:
+      - influxdb
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    volumes:
+      - /var/lib/grafana
+      - /var/log/grafana
+      - /var/lib/grafana/plugins
+    restart: always
+    env_file:
+      - .env
+
+  mongodb:
+    image: mongo:7.0.2-jammy
+    restart: always
+    ports:
+      - '27017:27017'
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD}
+    env_file:
+      - .env
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh mongodb://$MONGODB_USERNAME:$MONGODB_PASSWORD@localhost:27017/admin --quiet
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  elasticsearch:
+    image: elasticsearch:8.8.0
+    ports:
+      - '9200:9200'
+      - '9300:9300'
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: false
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9200" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  application:
+    build:
+      context: .
+      dockerfile: application.dockerfile
+    ports:
+      - '8080:8080'
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/healthz" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    env_file:
+      - .env
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    ports:
+      - "8085:80"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:80/application/healthz" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    depends_on:
+      application:
+        condition: service_healthy
+      grafana:
+        condition: service_started
