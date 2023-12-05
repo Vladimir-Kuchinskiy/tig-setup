@@ -1,6 +1,6 @@
 Build
 ```bash
-docker build -f nginx-image/Dockerfile -t nginx-images ./nginx-image
+docker build -t nginx-images .
 ```
 
 Run
